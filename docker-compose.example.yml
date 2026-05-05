@@ -1,0 +1,42 @@
+services:
+  navidrome:
+    image: deluan/navidrome:latest
+    user: 1000:1000
+    ports:
+      - "4533:4533"
+    restart: unless-stopped
+    volumes:
+      - "/root/Navidrome:/data"
+
+  navidrome-to-listenbrainz:
+    image: python:3.10-slim
+    restart: unless-stopped
+    depends_on:
+      - navidrome
+    environment:
+      # Required
+      - LISTENBRAINZ_TOKEN=your_listenbrainz_token_here
+      - LISTENBRAINZ_USER=your_listenbrainz_username_here
+
+      # Default: /data/navidrome.db
+      - NAVIDROME_DB_PATH=/data/navidrome.db
+
+      # 5-field cron expression. Unset = run once and exit.
+      # First tick = full diff sync; subsequent ticks = incremental.
+      # Default: unset
+      - CRON_SCHEDULE=30 1 * * *
+
+      # Timezone for the cron schedule. Default: UTC
+      - TZ=America/Chicago
+
+      # Run a full sync immediately on start, before the first cron tick.
+      # Only applies when CRON_SCHEDULE is set. Default: false
+      - RUN_ON_START=false
+
+    volumes:
+      - /root/Navidrome:/data:ro
+      - /path/to/navidrome_to_listenbrainz:/app
+
+    working_dir: /app
+    command: bash -c "pip install -q -r requirements.txt && python
+      love_tracks_listenbrainz.py"
