@@ -1,48 +1,61 @@
-# Navidrome_love_to_ListenBrainz
-A Python script to synchronize your loved songs from your Navidrome database to your ListenBrainz.org profile.
-A maintenance script to run at your discretion, updating loved songs in Navidrome. This is necessary because loved songs do not sync automatically, even when Navidrome and ListenBrainz are configured to sync scrobbles.
+# Navidrome → ListenBrainz Loved Tracks Sync
 
-## Important Note
+Syncs loved/starred tracks from your Navidrome database to your ListenBrainz profile. Runs as a Docker container, either as a one-shot sync or on a cron schedule.
 
-Syncing loved tracks to ListenBrainz requires that each song in your Navidrome database has a valid `mbz_recording_id` from MusicBrainz.  
+## How it works
 
-To ensure this:
+- **Full diff sync** — fetches all loved tracks from ListenBrainz, compares against all starred tracks in Navidrome, and submits only the delta. Safe to re-run; already-synced tracks are skipped.
+- **Incremental sync** — on cron ticks after the first run, only tracks starred since the last sync are submitted. No ListenBrainz read needed.
+- Container restart always triggers a fresh full diff sync.
 
-1. Import song metadata from MusicBrainz, for example using [MusicBrainz Picard](https://picard.musicbrainz.org/).
-2. Perform a full scan of your Navidrome database so that the `mbz_recording_id` values are written and updated in the database.
+## Requirements
 
-Without the  `mbz_recording_id` attribute loved data will not sync correctly with ListenBrainz.
+Each track must have a valid `mbz_recording_id` (MusicBrainz Recording ID) in Navidrome. Tracks without one are skipped silently and reported in the startup summary.
 
-## Description
+To tag your library:
+1. Tag files with [MusicBrainz Picard](https://picard.musicbrainz.org/)
+2. Run a full rescan in Navidrome so the IDs are written to the database
 
-The script connects to your Navidrome database and retrieves all tracks you’ve marked as “loved” within the specified date range (`START_DATE` to `END_DATE`). It loops through each track, extracting essential metadata such as the recording MBID, artist name, track title, and album. Tracks without a valid MusicBrainz Recording MBID are skipped to ensure that only recognized recordings are submitted to ListenBrainz.
+## Setup
 
-For each valid track, the script sends a POST request to the ListenBrainz API with your user token, marking the track as “loved” on your ListenBrainz profile. To handle network issues or temporary API failures, the script includes a retry mechanism, attempting each request up to three times with a short delay between attempts. Progress and errors are logged to the console, and a summary is maintained for skipped or failed tracks, allowing users to review and troubleshoot any issues.
+Copy `docker-compose.example.yml` and configure the environment variables:
 
-## How It Works
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `LISTENBRAINZ_TOKEN` | Yes | — | Your ListenBrainz user token |
+| `LISTENBRAINZ_USER` | Yes | — | Your ListenBrainz username |
+| `NAVIDROME_DB_PATH` | No | `/data/navidrome.db` | Path to Navidrome's SQLite database inside the container |
+| `CRON_SCHEDULE` | No | — | 5-field cron expression. If unset, runs once and exits. |
+| `TZ` | No | `UTC` | Timezone for the cron schedule (e.g. `America/New_York`) |
+| `RUN_ON_START` | No | `false` | Run a full sync immediately on startup before the first cron tick. Only applies when `CRON_SCHEDULE` is set. |
 
-1. **Retrieve Loved Tracks**  
-   The script queries your Navidrome database for tracks marked as “loved” within the specified `START_DATE` and `END_DATE`. Each track’s metadata—recording MBID, artist, title, and album—is extracted for submission.
+Mount your Navidrome data directory to `/data` (read-only).
 
-2. **Validate Tracks**  
-   Tracks without a valid MusicBrainz Recording MBID are skipped, ensuring that only recognized recordings are sent to ListenBrainz.
-
-3. **Submit to ListenBrainz**  
-   Each valid track is sent to the ListenBrainz API via a POST request with your user token. A retry mechanism attempts each request up to three times in case of temporary network or API failures, with a short delay between attempts.
-
-4. **Logging and Summary**  
-   Successful submissions are logged as “Loved,” while skipped or failed tracks are tracked in a summary for review. This provides transparency and allows troubleshooting of any issues.
-
-## Configure the following variables
-
-| Name                 | Description                                                                                                     | Suggested Value                     |
-|----------------------|-----------------------------------------------------------------------------------------------------------------|------------------------------------|
-| `DB_PATH`            | Path to your Navidrome database file                                                                            | `/path/to/navidrome.db`            |
-| `LISTENBRAINZ_TOKEN` | Your ListenBrainz API token (see [ListenBrainz API docs](https://listenbrainz.readthedocs.io/en/latest/users/api/index.html)) | `YOUR_TOKEN_HERE`                  |
-| `START_DATE`         | Starting date limit to avoid uploading all likes every time. Can be the date of the latest execution           | `"2025-01-01"`                     |
-| `END_DATE`           | Ending date limit. Can be the date of the current execution                                                    | `"2026-01-15"`                     |
-
-## Execute the script
+## Run once
 
 ```bash
-python3 love_tracks_listenbrainz.py
+docker run --rm \
+  -e LISTENBRAINZ_TOKEN=your_token \
+  -e LISTENBRAINZ_USER=your_username \
+  -v /path/to/navidrome/data:/data:ro \
+  -v $(pwd):/app \
+  -w /app \
+  python:3.10-slim \
+  bash -c "pip install -q -r requirements.txt && python love_tracks_listenbrainz.py"
+```
+
+## Run on a schedule (Docker Compose)
+
+See `docker-compose.example.yml` for a full example. The key section:
+
+```yaml
+environment:
+  - LISTENBRAINZ_TOKEN=your_token
+  - LISTENBRAINZ_USER=your_username
+  - CRON_SCHEDULE=30 1 * * *   # 1:30 AM daily
+  - TZ=America/New_York
+  - RUN_ON_START=true
+volumes:
+  - /path/to/navidrome/data:/data:ro
+  - /path/to/this/repo:/app
+```
